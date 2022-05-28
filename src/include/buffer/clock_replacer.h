@@ -16,8 +16,10 @@
 #include <mutex>  // NOLINT
 #include <vector>
 
+#include <deque>
 #include "buffer/replacer.h"
 #include "common/config.h"
+#include "unordered_map"
 
 namespace bustub {
 
@@ -47,6 +49,11 @@ class ClockReplacer : public Replacer {
 
  private:
   // TODO(student): implement me!
+  std::unordered_map<frame_id_t, bool> pined_page;
+  std::unordered_map<frame_id_t, bool> que_page;
+  std::deque<frame_id_t> que;
+  std::mutex mu;
+  size_t cap;
 };
 
 }  // namespace bustub
