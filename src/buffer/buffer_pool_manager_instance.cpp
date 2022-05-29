@@ -66,6 +66,7 @@ bool BufferPoolManagerInstance::FlushPgImp(page_id_t page_id) {
   }
 
   this->disk_manager_->WritePage(pages_[it->second].page_id_, pages_[it->second].data_);
+  // pages_[it->second].is_dirty_ = false;
   latch_.unlock();
 
   return true;
@@ -82,17 +83,19 @@ Page *BufferPoolManagerInstance::NewPgImp(page_id_t *page_id) {
   // 0.   Make sure you call AllocatePage!
   frame_id_t fid = 0;
 
+  latch_.lock();
   // 1.   If all the pages in the buffer pool are pinned, return nullptr.
   if (this->replacer_->Size() == 0 && free_list_.empty()) {
-    // LOG_INFO("all pages are pinned\n");
+    LOG_INFO("all pages are pinned\n");
     *page_id = INVALID_PAGE_ID;
+    latch_.unlock();
     return nullptr;
   }
 
-  latch_.lock();
   page_id_t pid = this->AllocatePage();
 
   // 2.   Pick a victim page P from either the free list or the replacer. Always pick from the free list first.
+  // TODO pick from free list
   if (!free_list_.empty()) {
     fid = free_list_.front();
     free_list_.pop_front();
@@ -111,13 +114,12 @@ Page *BufferPoolManagerInstance::NewPgImp(page_id_t *page_id) {
   page_table_.erase(p->page_id_);
 
   // 3.   Update P's metadata, zero out memory and add P to the page table.
-  p->WLatch();
   p->ResetMemory();
   p->page_id_ = pid;
-  p->WUnlatch();
+  p->pin_count_++;
   page_table_[pid] = fid;
 
-  // LOG_INFO("new page pid=%d,fid=%d\n", pid, fid);
+  LOG_INFO("new page pid=%d,fid=%d\n", pid, fid);
 
   // 4.   Set the page ID output parameter. Return a pointer to P.
   *page_id = pid;
@@ -132,38 +134,36 @@ Page *BufferPoolManagerInstance::FetchPgImp(page_id_t page_id) {
   // 1.1    If P exists, pin it and return it immediately.
   // 1.2    If P does not exist, find a replacement page (R) from either the free list or the replacer.
   //        Note that pages are always found from the free list first.
+  latch_.lock();
   Page *p = nullptr;
   auto it = page_table_.find(page_id);
   if (it != page_table_.end()) {
     p = &(pages_)[it->second];
-    this->replacer_->Pin(it->second);
-    p->WLatch();
     p->pin_count_++;
-    p->WUnlatch();
-    // LOG_INFO("fetch page from page table page_id=%d, fid=%d\n", p->page_id_, it->second);
+    this->replacer_->Pin(it->second);
+    latch_.unlock();
+    LOG_INFO("fetch page from page table page_id=%d, fid=%d\n", p->page_id_, it->second);
     return p;
   }
 
-  latch_.lock();
   frame_id_t fid = 0;
   if (!free_list_.empty()) {
     fid = free_list_.front();
     free_list_.pop_front();
   } else {
     if (!this->replacer_->Victim(&fid)) {
-      // LOG_INFO("replacer find victim err page_id=%d, fid=%d\n", page_id, fid);
+      LOG_INFO("replacer find victim err page_id=%d, fid=%d\n", page_id, fid);
       latch_.unlock();
       return nullptr;
     }
 
-    // LOG_INFO("frame_id=%d is victim\n", fid);
+    LOG_INFO("frame_id=%d is victim\n", fid);
   }
 
   // 2.     If R is dirty, write it back to the disk.
-  // LOG_INFO("fetch page, r is dirty page, fid=%d,page_id=%d\n", fid, page_id);
+  LOG_INFO("fetch page, r is dirty page, fid=%d,page_id=%d\n", fid, page_id);
   Page *r = &(pages_)[fid];
-  // LOG_INFO("fetch page, r is dirty page, fid=%d,r.page_id=%d,page_id=%d\n", fid, r->page_id_, page_id);
-  r->WLatch();
+  LOG_INFO("fetch page, r is dirty page, fid=%d,r.page_id=%d,page_id=%d\n", fid, r->page_id_, page_id);
   if (r->IsDirty()) {
     this->disk_manager_->WritePage(r->page_id_, r->data_);
   }
@@ -171,9 +171,8 @@ Page *BufferPoolManagerInstance::FetchPgImp(page_id_t page_id) {
   // 3.     Delete R from the page table and insert P.
   page_table_.erase(r->GetPageId());
   p = r;
-  p->is_dirty_ = false;
   p->page_id_ = page_id;
-  r->WUnlatch();
+  p->pin_count_++;
   page_table_[p->GetPageId()] = fid;
 
   // 4.     Update P's metadata, read in the page content from disk, and then return a pointer to P.
@@ -204,8 +203,9 @@ bool BufferPoolManagerInstance::DeletePgImp(page_id_t page_id) {
     return false;
   }
 
-  page_table_.erase(p->GetPageId());
+  page_table_.erase(page_id);
   p->ResetMemory();
+  p->page_id_ = INVALID_PAGE_ID;
   free_list_.push_back(it->second);
 
   latch_.unlock();
@@ -214,21 +214,24 @@ bool BufferPoolManagerInstance::DeletePgImp(page_id_t page_id) {
 }
 
 bool BufferPoolManagerInstance::UnpinPgImp(page_id_t page_id, bool is_dirty) {
+  latch_.lock();
   auto it = page_table_.find(page_id);
   if (it == page_table_.end()) {
+    latch_.unlock();
     return false;
   }
 
-  latch_.lock();
   Page *p = &pages_[it->second];
-  p->WLatch();
+  if (p->GetPinCount() <= 0) {
+    latch_.unlock();
+    return false;
+  }
+
   if (is_dirty) {
     this->disk_manager_->WritePage(p->page_id_, p->data_);
-    p->is_dirty_ = false;
   }
   this->replacer_->Unpin(it->second);
   p->pin_count_--;
-  p->WUnlatch();
   latch_.unlock();
 
   return true;

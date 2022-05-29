@@ -16,7 +16,7 @@ namespace bustub {
 
 LRUReplacer::LRUReplacer(size_t num_pages) { cap = num_pages; }
 
-LRUReplacer::~LRUReplacer() {}
+LRUReplacer::~LRUReplacer(){};
 
 bool LRUReplacer::Victim(frame_id_t *frame_id) {
   if (que.size() == 0) {
