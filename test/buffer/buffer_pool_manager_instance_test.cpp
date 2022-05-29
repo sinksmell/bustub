@@ -133,6 +133,13 @@ TEST(BufferPoolManagerInstanceTest, SampleTest) {
   EXPECT_NE(nullptr, bpm->NewPage(&page_id_temp));
   EXPECT_EQ(nullptr, bpm->FetchPage(0));
 
+  // Scenario: Delete page
+  for (int i = 0; i < 4; i++) {
+    EXPECT_EQ(true, bpm->DeletePage(i));
+  }
+
+  EXPECT_EQ(false,bpm->DeletePage(5));
+
   // Shutdown the disk manager and remove the temporary file we created.
   disk_manager->ShutDown();
   remove("test.db");

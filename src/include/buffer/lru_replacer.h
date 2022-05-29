@@ -12,13 +12,15 @@
 
 #pragma once
 
-#include <deque>
 #include <list>
 #include <mutex>  // NOLINT
 #include <vector>
+
+#include <mutex>
 #include "buffer/replacer.h"
 #include "common/config.h"
 #include "unordered_map"
+#include <deque>
 
 namespace bustub {
 
