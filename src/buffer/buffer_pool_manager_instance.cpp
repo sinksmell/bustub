@@ -66,15 +66,16 @@ auto BufferPoolManagerInstance::FlushPgImp(page_id_t page_id) -> bool {
 
   auto frame_id = it->second;
   this->disk_manager_->WritePage(pages_[frame_id].page_id_, pages_[frame_id].data_);
-  pages_[it->second].is_dirty_ = false;
 
   return true;
 }
 
 void BufferPoolManagerInstance::FlushAllPgsImp() {
+  std::scoped_lock<std::mutex> lock(latch_);
   // You can do it!
-  for (size_t i = 0; i < pool_size_; ++i) {
-    this->FlushPage(pages_[i].page_id_);
+  for (auto it = page_table_.begin(); it != page_table_.end(); it++) {
+    auto i = it->second;
+    this->disk_manager_->WritePage(pages_[i].page_id_, pages_[i].data_);
   }
 }
 
@@ -220,6 +221,11 @@ auto BufferPoolManagerInstance::DeletePgImp(page_id_t page_id) -> bool {
     return false;
   }
 
+  //  删除的时候也要刷盘
+  if (p->IsDirty()) {
+    this->disk_manager_->WritePage(p->page_id_, p->data_);
+  }
+
   this->DeallocatePage(page_id);
 
   page_table_.erase(page_id);
@@ -243,11 +249,14 @@ auto BufferPoolManagerInstance::UnpinPgImp(page_id_t page_id, bool is_dirty) -> 
   auto frame_id = it->second;
   Page *p = &pages_[frame_id];
   // 脏页标记为干净页的时候，是否刷盘?
-  p->is_dirty_ = is_dirty;
-  // if (is_dirty != p->is_dirty_) {
-  //   this->disk_manager_->WritePage(p->page_id_, p->data_);
-  //   p->is_dirty_ = is_dirty;
-  // }
+  // 在调用方处会进行刷盘
+  // 正常的流程是，fetch -> wrtie/read -> unpin(is_dirty)/unpin(is_not_dirty)
+  // is_dirty -> is_not_dirty (在 fetch/new 的时候操作)
+  // 只要写过了就设置 is_dirty=true
+  // false/true -> true 单向变化
+  if (is_dirty) {
+    p->is_dirty_ = is_dirty;
+  }
 
   if (p->GetPinCount() <= 0) {
     return false;
